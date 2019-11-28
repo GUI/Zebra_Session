@@ -23,6 +23,7 @@ class Zebra_Session {
     private $lock_to_ip;
     private $lock_to_user_agent;
     private $table_name;
+    private $enable_db_lock;
 
     /**
      *  Constructor of class. Initializes the class and automatically calls
@@ -206,7 +207,7 @@ class Zebra_Session {
      *                                          Default is TRUE.
      *  @return void
      */
-    public function __construct(&$link, $security_code, $session_lifetime = '', $lock_to_user_agent = true, $lock_to_ip = false, $gc_probability = '', $gc_divisor = '', $table_name = 'session_data', $lock_timeout = 60, $start_session = true) {
+    public function __construct(&$link, $security_code, $session_lifetime = '', $lock_to_user_agent = true, $lock_to_ip = false, $gc_probability = '', $gc_divisor = '', $table_name = 'session_data', $lock_timeout = 60, $start_session = true, $enable_db_lock = true) {
 
         // continue if the provided link is valid
         if ($link instanceof MySQLi && $link->connect_error === null) {
@@ -259,6 +260,8 @@ class Zebra_Session {
             // the maximum amount of time (in seconds) for which a process can lock the session
             $this->lock_timeout = $lock_timeout;
 
+            $this->enable_db_lock = $enable_db_lock;
+
             // register the new handler
             session_set_save_handler(
                 array(&$this, 'open'),
@@ -310,6 +313,9 @@ class Zebra_Session {
      *  @access private
      */
     function close() {
+        if (!$this->enable_db_lock) {
+            return true;
+        }
 
         // release the lock associated with the current session
         if ($this->_mysql_query('SELECT RELEASE_LOCK("' . $this->session_lock . '")'))
@@ -474,11 +480,13 @@ class Zebra_Session {
         // thanks to Andreas Heissenberger (see https://github.com/stefangabos/Zebra_Session/issues/16)
         $this->session_lock = $this->_mysql_real_escape_string('session_' . sha1($session_id));
 
-        // try to obtain a lock with the given name and timeout
-        $result = $this->_mysql_query('SELECT GET_LOCK("' . $this->session_lock . '", ' . $this->_mysql_real_escape_string($this->lock_timeout) . ')');
+        if ($this->enable_db_lock) {
+            // try to obtain a lock with the given name and timeout
+            $result = $this->_mysql_query('SELECT GET_LOCK("' . $this->session_lock . '", ' . $this->_mysql_real_escape_string($this->lock_timeout) . ')');
 
-        // stop if there was an error
-        if (!$result || mysqli_num_rows($result) != 1 || !($row = mysqli_fetch_array($result)) || $row[0] != 1) throw new Exception('Zebra_Session: Could not obtain session lock!');
+            // stop if there was an error
+            if (!$result || mysqli_num_rows($result) != 1 || !($row = mysqli_fetch_array($result)) || $row[0] != 1) throw new Exception('Zebra_Session: Could not obtain session lock!');
+        }
 
         //  reads session data associated with a session id, but only if
         //  -   the session ID exists;
